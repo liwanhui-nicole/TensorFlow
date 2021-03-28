@@ -1,59 +1,87 @@
-import  os
-import  tensorflow as tf
-from    tensorflow import keras
-from    tensorflow.keras import layers, optimizers, datasets
-import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import datasets
+import os
 
-os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+# 调整log等级，减少无关紧要的错误提示
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# 手动导入数据集有两种，[mnist.npz]和[四个压缩包]，分别修改了[mnist.py]和[input_data.py]的数据路径
+# 用input方式的代码如下
+# from tensorflow.examples.tutorials.mnist import input_data
+# mnist = input_data.read_data_sets('/Users/nicole/Documents/TensorFlow/MNIST_data/', one_hot=True)
 
-(x, y), (x_val, y_val) = datasets.mnist.load_data() 
+(x, y), _ = datasets.mnist.load_data()
+
+# x的区间为（0，255），但训练时使用（0，1）的数据更好，所以除以255
 x = tf.convert_to_tensor(x, dtype=tf.float32) / 255.
+# y在后面进行onehot的处理
 y = tf.convert_to_tensor(y, dtype=tf.int32)
-y = tf.one_hot(y, depth=10)
-print(x.shape, y.shape)
-train_dataset = tf.data.Dataset.from_tensor_slices((x, y))
-train_dataset = train_dataset.batch(200)
 
-model = keras.Sequential([ 
-    layers.Dense(512, activation='relu'),
-    layers.Dense(256, activation='relu'),
-    layers.Dense(10)])
+# 为了查看x，y的相关值，结果如下
+# (60000, 28, 28) (60000,) <dtype: 'float32'> <dtype: 'int32'>
+# tf.Tensor(0.0, shape=(), dtype=float32) tf.Tensor(1.0, shape=(), dtype=float32)
+# tf.Tensor(0, shape=(), dtype=int32) tf.Tensor(9, shape=(), dtype=int32)
+print(x.shape, y.shape, x.dtype, y.dtype)
+print(tf.reduce_min(x), tf.reduce_max(x))
+print(tf.reduce_min(y), tf.reduce_max(y))
 
-optimizer = optimizers.SGD(learning_rate=0.001)
+# 由于数据集有60K，数据太多，所以通过设定batch分次取数据，一次128个
+train_db = tf.data.Dataset.from_tensor_slices((x, y)).batch(128)
+train_iter = iter(train_db)
+sample = next(train_iter)
 
+# 查看一个batch的值，结果如下（分别为x，y的值）
+# batch: (128, 28, 28) (128,)
+print('batch:', sample[0].shape, sample[1].shape)
 
-def train_epoch(epoch):
+# 定义每个需要进行优化的变量（这里的tf.Variable是必须的，如果没有回导致求导后的值为None）
+# 初始方差值默认为[1]，但对于本次训练，方差[1]过大会发生梯度爆炸，因此追加[stddev=0.1]使方差初始值为0.1
+# 梯度爆炸现象：[loss：nan]
+w1 = tf.Variable(tf.random.truncated_normal([784, 256], stddev=0.1))
+b1 = tf.Variable(tf.zeros([256]))
+w2 = tf.Variable(tf.random.truncated_normal([256, 128], stddev=0.1))
+b2 = tf.Variable(tf.zeros([128]))
+w3 = tf.Variable(tf.random.truncated_normal([128, 10], stddev=0.1))
+b3 = tf.Variable(tf.zeros([10]))
 
-    # Step4.loop
-    for step, (x, y) in enumerate(train_dataset):
+# 通常使用的学习率 （1e-3 = 0.001）
+lr = 1e-3
 
+# epoch为对数据集整体进行循环训练，为了使结果更加逼近（这里为循环10次）
+for epoch in range(10):
 
+    # step 为每一个batch为一个step，可以阶段性的查看结果
+    for step, (x, y) in enumerate(train_db):
+        
+        # reshape时，[-1]相当于未知数，由程序自己算出，所以一个式子中只能出现一个[-1]
+        x = tf.reshape(x, [-1, 28*28])
+        
+        # 对待优化变量进行求导
         with tf.GradientTape() as tape:
-            # [b, 28, 28] => [b, 784]
-            x = tf.reshape(x, (-1, 28*28))
-            # Step1. compute output
-            # [b, 784] => [b, 10]
-            out = model(x)
-            # Step2. compute loss
-            loss = tf.reduce_sum(tf.square(out - y)) / x.shape[0]
+            h1 = x@w1 + tf.broadcast_to(b1, [x.shape[0], 256])
+            h1 = tf.nn.relu(h1)
+            h2 = h1@w2 + tf.broadcast_to(b2, [h1.shape[0], 128])
+            h2 = tf.nn.relu(h2)
+            out = h2@w3 + tf.broadcast_to(b3, [h2.shape[0], 10])
 
-        # Step3. optimize and update w1, w2, w3, b1, b2, b3
-        grads = tape.gradient(loss, model.trainable_variables)
-        # w' = w - lr * grad
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            y_onehot = tf.one_hot(y, depth=10)
+
+            # 求误差的平均方差  mse = mean(sum(y - out)^2)
+            loss = tf.square(y_onehot - out)
+            loss = tf.reduce_mean(loss)
+        
+        # 将求导后的值赋予grads
+        grads = tape.gradient(loss, [w1, b1, w2, b2, w3, b3])
+        
+        # 此处的数学公式为 W1 = W1 - lr * grads[0]
+        # 但由于上述公式的返回值为tensor类型，会导致第二次优化时的grads为None，因此需用assign_sub()的函数，对其进行原地更新（保持类型不变）
+        w1.assign_sub(lr * grads[0])
+        b1.assign_sub(lr * grads[1])
+        w2.assign_sub(lr * grads[2])
+        b2.assign_sub(lr * grads[3])
+        w3.assign_sub(lr * grads[4])
+        b3.assign_sub(lr * grads[5])
 
         if step % 100 == 0:
-            print(epoch, step, 'loss:', loss.numpy())
-
-
-def train():
-
-    for epoch in range(30):
-
-        train_epoch(epoch)
-
-
-if __name__ == '__main__':
-    train()
+            print(epoch, step, 'loss', float(loss))
