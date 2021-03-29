@@ -11,12 +11,16 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # from tensorflow.examples.tutorials.mnist import input_data
 # mnist = input_data.read_data_sets('/Users/nicole/Documents/TensorFlow/MNIST_data/', one_hot=True)
 
-(x, y), _ = datasets.mnist.load_data()
+#如暂时不需要测试，可以用下划线代替测试数据集的值：  (x, y), _ = datasets.mnist.load_data()
+(x, y), (x_test, y_test) = datasets.mnist.load_data()
 
 # x的区间为（0，255），但训练时使用（0，1）的数据更好，所以除以255
 x = tf.convert_to_tensor(x, dtype=tf.float32) / 255.
 # y在后面进行onehot的处理
 y = tf.convert_to_tensor(y, dtype=tf.int32)
+#对测试集数据做同样的处理
+x_test = tf.convert_to_tensor(x_test, dtype=tf.float32) / 255.
+y_test = tf.convert_to_tensor(y_test, dtype=tf.int32)
 
 # 为了查看x，y的相关值，结果如下
 # (60000, 28, 28) (60000,) <dtype: 'float32'> <dtype: 'int32'>
@@ -28,6 +32,7 @@ print(tf.reduce_min(y), tf.reduce_max(y))
 
 # 由于数据集有60K，数据太多，所以通过设定batch分次取数据，一次128个
 train_db = tf.data.Dataset.from_tensor_slices((x, y)).batch(128)
+test_db = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(128)
 train_iter = iter(train_db)
 sample = next(train_iter)
 
@@ -47,6 +52,8 @@ b3 = tf.Variable(tf.zeros([10]))
 
 # 通常使用的学习率 （1e-3 = 0.001）
 lr = 1e-3
+#为计算准确率，定义如下变量
+total_correct, total_num = 0,0
 
 # epoch为对数据集整体进行循环训练，为了使结果更加逼近（这里为循环10次）
 for epoch in range(10):
@@ -85,6 +92,38 @@ for epoch in range(10):
 
         if step % 100 == 0:
             print(epoch, step, 'loss', float(loss))
+    
+    #在每一次数据集整体完成优化后测试结果
+    #（⚠️注意）此处和教程不一致，但没查到原因
+    #教程中在测试集的循环中仍然使用（x, y）,为什么不使用（x_test, y_test）呢？
+    for step, (x_test, y_test) in enumerate(test_db):
+        x_test = tf.reshape(x_test, [-1, 28*28])
+        
+        #（⚠️注意）这个循环中为什么不再需要对b做broadcast？
+        h1 = tf.nn.relu(x_test@w1 + b1)
+        h2 = tf.nn.relu(h1 @ w2 + b2)
+        out = h2 @ w3 + b3
+
+        #softmax是将实数范围的数值映射到（0，1）的范围内
+        prob = tf.nn.softmax(out, axis=1)
+        
+        #argmax是对于[b，10]的axis=1上获得最大值的存储位置，结果为[b]
+        #但argmax之后的结果为int64，可能与其他变量类型冲突，需要注意（此处需要统一为int32）
+        pred = tf.argmax(prob, axis=1)
+        pred = tf.cast(pred, tf.int32)
+        
+        #将预测值与实际值做比较，并且结果的布尔类型转换为int32（True为1，False为0）
+        correct = tf.cast(tf.equal(pred, y_test), dtype=tf.int32)
+        #因为True为1，所以可以通过求和得到所有正确的个数
+        correct = tf.reduce_sum(correct)
+        
+        #上述算出的correct是tensor类型的，这里需要转换为numpy的int类型
+        total_correct += int(correct)
+        #总测试个数，是测试集x_test的shape中的[b]，是在axis=0的轴上
+        total_num += x_test.shape[0]
+
+    acc = total_correct / total_num
+    print('test_acc:', acc)           
 
 
 
@@ -143,3 +182,52 @@ for epoch in range(10):
 9 400 loss 0.08972378075122833
 
 Process finished with exit code 0
+
+
+
+#增加测试后的结果
+==========================================
+0 0 loss 0.31330037117004395
+0 100 loss 0.18571552634239197
+0 200 loss 0.183339923620224
+0 300 loss 0.1677647829055786
+0 400 loss 0.1634620875120163
+test_acc: 0.1424
+1 0 loss 0.15954962372779846
+1 100 loss 0.14660294353961945
+1 200 loss 0.15136218070983887
+1 300 loss 0.14119066298007965
+1 400 loss 0.13893163204193115
+test_acc: 0.17705
+2 0 loss 0.13755366206169128
+2 100 loss 0.12888653576374054
+2 200 loss 0.13296422362327576
+2 300 loss 0.12448344379663467
+2 400 loss 0.12351510673761368
+test_acc: 0.2088
+3 0 loss 0.12322632968425751
+3 100 loss 0.11712668836116791
+3 200 loss 0.12062723934650421
+3 300 loss 0.11321000009775162
+3 400 loss 0.11304719746112823
+test_acc: 0.238075
+4 0 loss 0.1131390705704689
+4 100 loss 0.10863496363162994
+4 200 loss 0.11170260608196259
+4 300 loss 0.1050088182091713
+4 400 loss 0.10527098178863525
+test_acc: 0.26426
+5 0 loss 0.10561511665582657
+5 100 loss 0.10209278017282486
+5 200 loss 0.10473485291004181
+5 300 loss 0.09872893989086151
+5 400 loss 0.09927131235599518
+test_acc: 0.2872166666666667
+6 0 loss 0.09971088171005249
+6 100 loss 0.09687111526727676
+6 200 loss 0.09918751567602158
+6 300 loss 0.09375850856304169
+6 400 loss 0.09448786824941635
+test_acc: 0.3077285714285714
+（不完全结果）
+
